@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Phase 1 voice self-host: dist/ committed for git-URL install on ca-paperclip-dev
+# (PaperClip's plugin install uses npm --ignore-scripts so prepare/tsc won't run)
+!dist/
