@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Phase 1B voice provider abstraction: dist/ committed for git-URL install on ca-paperclip-dev
+# (replaces feat/voice-client-skeleton-dist; same self-host pattern)
+!dist/
