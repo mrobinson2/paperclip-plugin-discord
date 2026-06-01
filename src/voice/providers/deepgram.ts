@@ -1,16 +1,21 @@
 /**
- * Deepgram streaming STT adapter.
+ * Deepgram streaming STT provider.
  *
- * One WebSocket per utterance. Send raw 16-bit PCM as binary frames,
- * then send `{"type":"Finalize"}` as a text frame to flush. Read JSON
- * messages until one carries `is_final: true` with the final transcript.
+ * Per-utterance: one WebSocket per call. Send raw 16-bit PCM as binary frames,
+ * then send `{"type":"Finalize"}` as a text frame to flush. Read JSON messages
+ * until one carries `is_final: true` with the final transcript.
+ *
+ * In the Phase 1B architecture this provider is a **fallback** — by default,
+ * AzureVoiceLiveProvider handles STT. Deepgram only initializes when
+ * VOICE_PROVIDER=deepgram OR (VOICE_ENABLE_DEEPGRAM_FALLBACK=true AND
+ * Azure Voice Live init fails).
  *
  * API reference: https://developers.deepgram.com/docs/streaming
  */
 
 import { WebSocket } from "ws";
 
-import type { STTAdapter } from "./types.js";
+import type { UtteranceContext, VoiceProvider } from "../types.js";
 
 interface DeepgramConfig {
   apiKey: string;
@@ -20,7 +25,9 @@ interface DeepgramConfig {
   model?: string;
 }
 
-export class DeepgramSTTAdapter implements STTAdapter {
+export class DeepgramProvider implements VoiceProvider {
+  readonly name = "deepgram";
+
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;
@@ -31,7 +38,11 @@ export class DeepgramSTTAdapter implements STTAdapter {
     this.model = cfg.model ?? "nova-2";
   }
 
-  async transcribeUtterance(pcm: Buffer): Promise<string> {
+  // Per-utterance provider: nothing to open/close at the session level.
+  async startSession(): Promise<void> {}
+  async stopSession(): Promise<void> {}
+
+  async transcribeUtterance(pcm: Buffer, _ctx: UtteranceContext): Promise<string> {
     const url =
       `${this.baseUrl}/v1/listen` +
       `?encoding=linear16&sample_rate=48000&channels=1` +

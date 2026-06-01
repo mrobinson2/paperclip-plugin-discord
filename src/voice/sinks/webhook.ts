@@ -1,37 +1,36 @@
 /**
- * POST utterance transcripts to the war-room text channel via webhook,
- * surfaced as "Michael (voice)" so existing Alfred routing picks them up
- * exactly as if Michael had typed them.
+ * POST transcripts to the war-room text channel via webhook, surfaced as
+ * "Michael (voice)" so existing Alfred routing picks them up exactly as if
+ * Michael had typed them.
  *
  * Discord webhook payload shape: { content, username, avatar_url? }.
  * Success = 204 No Content. We retry once on 5xx; hard-fail 4xx.
  *
- * Empty / whitespace-only transcripts are skipped — nothing meaningful
- * was said and posting noise to the war-room defeats the audit-trail value.
+ * Empty / whitespace-only transcripts are skipped — nothing meaningful was
+ * said and posting noise to the war-room defeats the audit-trail value.
  */
 
-import type { TextChannelRelay } from "./types.js";
+import type { TranscriptEvent, TranscriptSink } from "../types.js";
 
-interface RelayConfig {
+interface WebhookSinkConfig {
   webhookUrl: string;
   /** Display username for the webhook posts. Default: "Michael (voice)" */
   username?: string;
 }
 
-export class WebhookTextChannelRelay implements TextChannelRelay {
+export class WebhookTextChannelSink implements TranscriptSink {
+  readonly name = "webhook";
+
   private readonly webhookUrl: string;
   private readonly username: string;
 
-  constructor(cfg: RelayConfig) {
+  constructor(cfg: WebhookSinkConfig) {
     this.webhookUrl = cfg.webhookUrl;
     this.username = cfg.username ?? "Michael (voice)";
   }
 
-  async postTranscript(
-    text: string,
-    _metadata: { durationSec: number },
-  ): Promise<void> {
-    const trimmed = text.trim();
+  async post(event: TranscriptEvent): Promise<void> {
+    const trimmed = event.text.trim();
     if (trimmed.length === 0) {
       // Skip empty/whitespace — nothing meaningful was said.
       return;

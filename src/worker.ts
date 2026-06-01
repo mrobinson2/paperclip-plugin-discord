@@ -449,23 +449,43 @@ const plugin = definePlugin({
       config.enableProactiveSuggestions === true ||
       config.enableIntelligence === true;
 
-    // --- Phase 1 war-room voice: enabled only if all env vars set ---
-    // Voice startup is gated on env vars (not plugin config) for Phase 1 — the
-    // operator wires DEEPGRAM_API_KEY, WAR_ROOM_GUILD_ID, WAR_ROOM_VOICE_CHANNEL_ID,
-    // and MICHAEL_VOICE_WEBHOOK_URL on the container; if any are absent, voice
-    // initializes nothing (text routing keeps working).
+    // --- Phase 1B war-room voice: provider-abstracted ---
+    // Voice startup is gated on env vars. Required: guild + voice channel IDs,
+    // a provider with its credentials, and at least one sink. If any of the
+    // gates fail, voice initializes nothing and text routing is unaffected.
+    //
+    // Providers (VOICE_PROVIDER, default: azure_voice_live):
+    //   - azure_voice_live: AZURE_VOICE_LIVE_ENDPOINT + AZURE_VOICE_LIVE_API_KEY
+    //   - deepgram:         DEEPGRAM_API_KEY
+    //
+    // Optional fallback: VOICE_ENABLE_DEEPGRAM_FALLBACK=true + DEEPGRAM_API_KEY.
+    //
+    // Sinks (at least one required):
+    //   - webhook:        MICHAEL_VOICE_WEBHOOK_URL
+    //   - paperclip-issue: PAPERCLIP_VOICE_ISSUE_AGENT_ID + PAPERCLIP_VOICE_ISSUE_COMPANY_ID
+    //
+    // Plan: docs/superpowers/plans/2026-05-31-voice-live-refactor.md (mrt-ai-agent-platform).
     const voiceEnv = {
       guildId: process.env.WAR_ROOM_GUILD_ID,
       voiceChannelId: process.env.WAR_ROOM_VOICE_CHANNEL_ID,
-      webhookUrl: process.env.MICHAEL_VOICE_WEBHOOK_URL,
+      provider: process.env.VOICE_PROVIDER ?? "azure_voice_live",
+      azureEndpoint: process.env.AZURE_VOICE_LIVE_ENDPOINT,
+      azureApiKey: process.env.AZURE_VOICE_LIVE_API_KEY,
       deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+      webhookUrl: process.env.MICHAEL_VOICE_WEBHOOK_URL,
+      paperclipIssueAgentId: process.env.PAPERCLIP_VOICE_ISSUE_AGENT_ID,
+      paperclipIssueCompanyId: process.env.PAPERCLIP_VOICE_ISSUE_COMPANY_ID,
     };
-    const voiceEnabled = !!(
-      voiceEnv.guildId &&
-      voiceEnv.voiceChannelId &&
-      voiceEnv.webhookUrl &&
-      voiceEnv.deepgramApiKey
-    );
+
+    const hasProviderCreds =
+      (voiceEnv.provider === "azure_voice_live" && !!voiceEnv.azureEndpoint && !!voiceEnv.azureApiKey) ||
+      (voiceEnv.provider === "deepgram" && !!voiceEnv.deepgramApiKey);
+    const hasWebhookSink = !!voiceEnv.webhookUrl;
+    const hasIssueSink = !!voiceEnv.paperclipIssueAgentId && !!voiceEnv.paperclipIssueCompanyId;
+    const hasAnySink = hasWebhookSink || hasIssueSink;
+
+    const voiceEnabled =
+      !!voiceEnv.guildId && !!voiceEnv.voiceChannelId && hasProviderCreds && hasAnySink;
 
     // --- Gateway connection for real-time interaction handling ---
     const gateway = await connectGateway(
@@ -482,22 +502,46 @@ const plugin = definePlugin({
       },
     );
 
-    // --- Phase 1 voice client startup ---
+    // --- Voice client startup ---
     // Failures here are isolated — voice errors must not crash the plugin or
-    // affect text routing. See docs/superpowers/specs/2026-05-28-war-room-voice-design.md
-    // §6 "Voice failure never blocks text."
-    let voiceClientStop: (() => void) | null = null;
+    // affect text routing.
+    let voiceClientStop: (() => Promise<void>) | null = null;
     if (voiceEnabled && gateway.voice) {
       try {
-        const { WarRoomVoiceClient, createPluginDiscordAdapter } = await import(
-          "./voice/index.js"
-        );
+        const {
+          WarRoomVoiceClient,
+          createPluginDiscordAdapter,
+          buildPrimaryProvider,
+          buildFallbackProvider,
+          startWithFallback,
+          WebhookTextChannelSink,
+          PaperclipIssueSink,
+        } = await import("./voice/index.js");
+
+        const primary = buildPrimaryProvider(process.env);
+        const fallback = buildFallbackProvider(process.env);
+        const provider = await startWithFallback(primary, fallback, ctx.logger);
+
+        const sinks = [] as Array<
+          InstanceType<typeof WebhookTextChannelSink> | InstanceType<typeof PaperclipIssueSink>
+        >;
+        if (hasWebhookSink) {
+          sinks.push(new WebhookTextChannelSink({ webhookUrl: voiceEnv.webhookUrl! }));
+        }
+        if (hasIssueSink) {
+          sinks.push(new PaperclipIssueSink({
+            issues: ctx.issues,
+            companyId: voiceEnv.paperclipIssueCompanyId!,
+            assigneeAgentId: voiceEnv.paperclipIssueAgentId!,
+          }));
+        }
+
         const adapterCreator = createPluginDiscordAdapter(gateway.voice);
         const voiceClient = new WarRoomVoiceClient(ctx, {
           guildId: voiceEnv.guildId!,
           voiceChannelId: voiceEnv.voiceChannelId!,
-          textChannelWebhookUrl: voiceEnv.webhookUrl!,
-          deepgramApiKey: voiceEnv.deepgramApiKey!,
+          provider,
+          sinks,
           voiceAdapterCreator: adapterCreator,
         });
         await voiceClient.start();
@@ -508,15 +552,26 @@ const plugin = definePlugin({
         });
       }
     } else if (!voiceEnabled) {
-      ctx.logger.info(
-        "voice: disabled — missing one of WAR_ROOM_GUILD_ID, WAR_ROOM_VOICE_CHANNEL_ID, MICHAEL_VOICE_WEBHOOK_URL, DEEPGRAM_API_KEY",
-      );
+      const missing: string[] = [];
+      if (!voiceEnv.guildId) missing.push("WAR_ROOM_GUILD_ID");
+      if (!voiceEnv.voiceChannelId) missing.push("WAR_ROOM_VOICE_CHANNEL_ID");
+      if (!hasProviderCreds) {
+        missing.push(
+          voiceEnv.provider === "azure_voice_live"
+            ? "AZURE_VOICE_LIVE_ENDPOINT+AZURE_VOICE_LIVE_API_KEY"
+            : "DEEPGRAM_API_KEY",
+        );
+      }
+      if (!hasAnySink) {
+        missing.push("MICHAEL_VOICE_WEBHOOK_URL or (PAPERCLIP_VOICE_ISSUE_AGENT_ID+PAPERCLIP_VOICE_ISSUE_COMPANY_ID)");
+      }
+      ctx.logger.info(`voice: disabled — missing ${missing.join(", ")}`);
     }
 
     ctx.events.on("plugin.stopping", async () => {
       if (voiceClientStop) {
         try {
-          voiceClientStop();
+          await voiceClientStop();
         } catch (error) {
           ctx.logger.warn("voice: stop failed during plugin shutdown", {
             error: error instanceof Error ? error.message : String(error),

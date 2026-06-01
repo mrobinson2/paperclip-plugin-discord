@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
-import { DeepgramSTTAdapter } from "../src/voice/stt-deepgram.js";
+import { DeepgramProvider } from "../src/voice/providers/deepgram.js";
 
 let mockServer: WebSocketServer | undefined;
 
@@ -19,7 +19,9 @@ afterEach(() => {
   mockServer = undefined;
 });
 
-describe("DeepgramSTTAdapter", () => {
+const CTX = { userId: "u1", durationSec: 1 };
+
+describe("DeepgramProvider", () => {
   it("sends PCM then Finalize and resolves with final transcript", async () => {
     let receivedBinary = false;
     let receivedFinalize = false;
@@ -43,11 +45,14 @@ describe("DeepgramSTTAdapter", () => {
       });
     });
 
-    const adapter = new DeepgramSTTAdapter({
+    const provider = new DeepgramProvider({
       apiKey: "test-key",
       baseUrl: `ws://localhost:${port}`,
     });
-    const transcript = await adapter.transcribeUtterance(Buffer.from([1, 2, 3, 4]));
+    const transcript = await provider.transcribeUtterance(
+      Buffer.from([1, 2, 3, 4]),
+      CTX,
+    );
 
     expect(receivedBinary).toBe(true);
     expect(receivedFinalize).toBe(true);
@@ -61,13 +66,13 @@ describe("DeepgramSTTAdapter", () => {
       });
     });
 
-    const adapter = new DeepgramSTTAdapter({
+    const provider = new DeepgramProvider({
       apiKey: "test-key",
       baseUrl: `ws://localhost:${port}`,
     });
 
     await expect(
-      adapter.transcribeUtterance(Buffer.from([1, 2, 3, 4])),
+      provider.transcribeUtterance(Buffer.from([1, 2, 3, 4]), CTX),
     ).rejects.toThrow(/no final transcript/i);
   });
 
@@ -77,13 +82,13 @@ describe("DeepgramSTTAdapter", () => {
       ws.close(4001, "unauthorized");
     });
 
-    const adapter = new DeepgramSTTAdapter({
+    const provider = new DeepgramProvider({
       apiKey: "bad-key",
       baseUrl: `ws://localhost:${port}`,
     });
 
     await expect(
-      adapter.transcribeUtterance(Buffer.from([1, 2, 3, 4])),
+      provider.transcribeUtterance(Buffer.from([1, 2, 3, 4]), CTX),
     ).rejects.toThrow();
   });
 
@@ -102,11 +107,21 @@ describe("DeepgramSTTAdapter", () => {
       });
     });
 
-    const adapter = new DeepgramSTTAdapter({
+    const provider = new DeepgramProvider({
       apiKey: "test-key",
       baseUrl: `ws://localhost:${port}`,
     });
-    const transcript = await adapter.transcribeUtterance(Buffer.from([1, 2, 3, 4]));
+    const transcript = await provider.transcribeUtterance(
+      Buffer.from([1, 2, 3, 4]),
+      CTX,
+    );
     expect(transcript).toBe("");
+  });
+
+  it("startSession + stopSession are no-ops", async () => {
+    const provider = new DeepgramProvider({ apiKey: "k" });
+    await expect(provider.startSession()).resolves.toBeUndefined();
+    await expect(provider.stopSession()).resolves.toBeUndefined();
+    expect(provider.name).toBe("deepgram");
   });
 });
