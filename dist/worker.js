@@ -370,14 +370,22 @@ const plugin = definePlugin({
         //   - paperclip-issue: PAPERCLIP_VOICE_ISSUE_AGENT_ID + PAPERCLIP_VOICE_ISSUE_COMPANY_ID
         //
         // Plan: docs/superpowers/plans/2026-05-31-voice-live-refactor.md (mrt-ai-agent-platform).
+        // Secrets are file-mounted under /secrets/<name> (MRTek convention). The
+        // plugin-host filters env vars, so secret env names won't propagate; read
+        // from the files. Non-secret values (IDs, hostnames) come from env vars
+        // that the plugin-worker-manager patch (patch-plugin-worker-manager.mjs)
+        // allow-lists explicitly.
+        const azureApiKeyFromFile = readSecretFile("azure-voice-live-api-key");
+        const deepgramKeyFromFile = readSecretFile("deepgram-api-key");
+        const webhookUrlFromFile = readSecretFile("michael-voice-webhook-url");
         const voiceEnv = {
             guildId: process.env.WAR_ROOM_GUILD_ID,
             voiceChannelId: process.env.WAR_ROOM_VOICE_CHANNEL_ID,
             provider: process.env.VOICE_PROVIDER ?? "azure_voice_live",
             azureEndpoint: process.env.AZURE_VOICE_LIVE_ENDPOINT,
-            azureApiKey: process.env.AZURE_VOICE_LIVE_API_KEY,
-            deepgramApiKey: process.env.DEEPGRAM_API_KEY,
-            webhookUrl: process.env.MICHAEL_VOICE_WEBHOOK_URL,
+            azureApiKey: azureApiKeyFromFile ?? process.env.AZURE_VOICE_LIVE_API_KEY,
+            deepgramApiKey: deepgramKeyFromFile ?? process.env.DEEPGRAM_API_KEY,
+            webhookUrl: webhookUrlFromFile ?? process.env.MICHAEL_VOICE_WEBHOOK_URL,
             paperclipIssueAgentId: process.env.PAPERCLIP_VOICE_ISSUE_AGENT_ID,
             paperclipIssueCompanyId: process.env.PAPERCLIP_VOICE_ISSUE_COMPANY_ID,
         };
@@ -402,8 +410,15 @@ const plugin = definePlugin({
         if (voiceEnabled && gateway.voice) {
             try {
                 const { WarRoomVoiceClient, createPluginDiscordAdapter, buildPrimaryProvider, buildFallbackProvider, startWithFallback, WebhookTextChannelSink, PaperclipIssueSink, } = await import("./voice/index.js");
-                const primary = buildPrimaryProvider(process.env);
-                const fallback = buildFallbackProvider(process.env);
+                // Build a synthetic env for the provider factory: file-mounted secrets
+                // get spliced in alongside the real env vars (factory reads env-shape).
+                const providerEnv = {
+                    ...process.env,
+                    AZURE_VOICE_LIVE_API_KEY: voiceEnv.azureApiKey ?? process.env.AZURE_VOICE_LIVE_API_KEY,
+                    DEEPGRAM_API_KEY: voiceEnv.deepgramApiKey ?? process.env.DEEPGRAM_API_KEY,
+                };
+                const primary = buildPrimaryProvider(providerEnv);
+                const fallback = buildFallbackProvider(providerEnv);
                 const provider = await startWithFallback(primary, fallback, ctx.logger);
                 const sinks = [];
                 if (hasWebhookSink) {
