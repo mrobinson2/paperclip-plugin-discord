@@ -166,14 +166,47 @@ const plugin = definePlugin({
             ...DEFAULT_CONFIG,
             ...rawConfig,
         };
-        if (!config.discordBotTokenRef) {
-            ctx.logger.warn("No discordBotTokenRef configured, plugin disabled");
+        // ── Bot token + board API key resolution ────────────────────────────────
+        // Prefer env vars (DISCORD_BOT_TOKEN, PAPERCLIP_BOARD_API_KEY) over
+        // ctx.secrets.resolve(). The env-var path lets operators wire credentials
+        // directly via container env (e.g. from Azure Key Vault → ACA secret refs)
+        // without depending on PaperClip's plugin-secrets-binding flow. The
+        // ctx.secrets.resolve() path remains as a fallback so the plugin still
+        // works in environments that DO use the in-platform secret store.
+        //
+        // Context: as of paperclipai/paperclip commit 87011615 (2026-04-26) the
+        // plugin secret-refs handler fails closed until "company-scoped plugin
+        // config" lands upstream. Even with that gate patched out, the post-May
+        // 9 secret-bindings system requires explicit per-config-path bindings
+        // that are awkward to set up programmatically. The env-var path bypasses
+        // both layers entirely.
+        const tokenFromEnv = process.env.DISCORD_BOT_TOKEN;
+        const boardApiKeyFromEnv = process.env.PAPERCLIP_BOARD_API_KEY;
+        let token = tokenFromEnv ?? null;
+        if (!token && config.discordBotTokenRef) {
+            try {
+                token = await ctx.secrets.resolve(config.discordBotTokenRef);
+            }
+            catch (err) {
+                ctx.logger.warn("discord plugin: ctx.secrets.resolve(discordBotTokenRef) failed; " +
+                    "set DISCORD_BOT_TOKEN env var to bypass the secret store", { error: err instanceof Error ? err.message : String(err) });
+            }
+        }
+        if (!token) {
+            ctx.logger.warn("No bot token available (DISCORD_BOT_TOKEN env not set AND " +
+                "ctx.secrets.resolve(discordBotTokenRef) unavailable). Plugin disabled.");
             return;
         }
-        const token = await ctx.secrets.resolve(config.discordBotTokenRef);
-        const paperclipBoardApiKey = config.paperclipBoardApiKeyRef
-            ? await ctx.secrets.resolve(config.paperclipBoardApiKeyRef)
-            : "";
+        let paperclipBoardApiKey = boardApiKeyFromEnv ?? "";
+        if (!paperclipBoardApiKey && config.paperclipBoardApiKeyRef) {
+            try {
+                paperclipBoardApiKey = await ctx.secrets.resolve(config.paperclipBoardApiKeyRef);
+            }
+            catch (err) {
+                ctx.logger.warn("discord plugin: ctx.secrets.resolve(paperclipBoardApiKeyRef) failed; " +
+                    "set PAPERCLIP_BOARD_API_KEY env var to bypass the secret store", { error: err instanceof Error ? err.message : String(err) });
+            }
+        }
         const baseUrl = config.paperclipBaseUrl || "http://localhost:3100";
         const retentionDays = config.intelligenceRetentionDays || 30;
         const defaultGuildId = normalizeDiscordId(config.defaultGuildId);
