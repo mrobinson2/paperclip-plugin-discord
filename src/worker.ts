@@ -44,6 +44,7 @@ import { DiscordAdapter } from "./adapter.js";
 import { processMediaMessage, type MediaAttachment } from "./media-pipeline.js";
 import { registerCommand, parseCommandMessage, executeCommand, listCommands } from "./custom-commands.js";
 import { registerWatch, checkWatches } from "./proactive-suggestions.js";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 
 // Module-level state captured during setup() so onWebhook() can reuse it.
 let _pluginCtx: PluginContext | null = null;
@@ -323,11 +324,20 @@ const plugin = definePlugin({
     function readSecretFile(name: string): string | null {
       try {
         const p = `/secrets/${name}`;
-        const fs = require("fs") as typeof import("fs");
-        if (!fs.existsSync(p)) return null;
-        const v = fs.readFileSync(p, "utf-8").trim();
+        if (!existsSync(p)) {
+          // Diagnostic: list /secrets so we can see what's actually mounted.
+          try {
+            const entries = readdirSync("/secrets");
+            ctx.logger.warn(`[plugin] /secrets/${name} not present; /secrets/ contains: ${entries.join(", ")}`);
+          } catch {
+            ctx.logger.warn(`[plugin] /secrets directory not readable or absent`);
+          }
+          return null;
+        }
+        const v = readFileSync(p, "utf-8").trim();
         return v.length > 0 ? v : null;
-      } catch {
+      } catch (err) {
+        ctx.logger.warn(`[plugin] readSecretFile(${name}) error: ${err instanceof Error ? err.message : String(err)}`);
         return null;
       }
     }
