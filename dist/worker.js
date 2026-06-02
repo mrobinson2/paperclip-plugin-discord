@@ -167,22 +167,41 @@ const plugin = definePlugin({
             ...rawConfig,
         };
         // ── Bot token + board API key resolution ────────────────────────────────
-        // Prefer env vars (DISCORD_BOT_TOKEN, PAPERCLIP_BOARD_API_KEY) over
-        // ctx.secrets.resolve(). The env-var path lets operators wire credentials
-        // directly via container env (e.g. from Azure Key Vault → ACA secret refs)
-        // without depending on PaperClip's plugin-secrets-binding flow. The
-        // ctx.secrets.resolve() path remains as a fallback so the plugin still
-        // works in environments that DO use the in-platform secret store.
+        // Resolution order (most → least preferred):
+        //   1. File at /secrets/discord-bot-token (and /secrets/paperclip-board-api-key)
+        //      — MRTek convention per CLAUDE.md: "Secrets as files, not env vars.
+        //      Key Vault secrets are mounted under /secrets/<name>."
+        //   2. Env var (DISCORD_BOT_TOKEN, PAPERCLIP_BOARD_API_KEY).
+        //      NOTE: PaperClip's plugin-worker-manager (commit 778e775c era)
+        //      filters env vars when spawning plugin workers — only PATH, NODE_PATH,
+        //      PAPERCLIP_PLUGIN_ID, NODE_ENV, TZ pass through. So this path only
+        //      works if upstream allow-lists more env vars OR a custom patch
+        //      passes them through. Keep it for portability.
+        //   3. ctx.secrets.resolve() — the platform's secret-store path. Currently
+        //      gated by the secret-bindings system (commit 778e775c, May 2026)
+        //      which requires explicit per-config-path bindings.
         //
-        // Context: as of paperclipai/paperclip commit 87011615 (2026-04-26) the
-        // plugin secret-refs handler fails closed until "company-scoped plugin
-        // config" lands upstream. Even with that gate patched out, the post-May
-        // 9 secret-bindings system requires explicit per-config-path bindings
-        // that are awkward to set up programmatically. The env-var path bypasses
-        // both layers entirely.
+        // The /secrets file path is what actually works on MRTek today because
+        // the container has /secrets/<name> mounted via Azure Container Apps'
+        // "Secret" volume_mounts, and that mount is visible to all subprocesses.
+        function readSecretFile(name) {
+            try {
+                const p = `/secrets/${name}`;
+                const fs = require("fs");
+                if (!fs.existsSync(p))
+                    return null;
+                const v = fs.readFileSync(p, "utf-8").trim();
+                return v.length > 0 ? v : null;
+            }
+            catch {
+                return null;
+            }
+        }
+        const tokenFromFile = readSecretFile("discord-bot-token");
+        const boardApiKeyFromFile = readSecretFile("paperclip-board-api-key");
         const tokenFromEnv = process.env.DISCORD_BOT_TOKEN;
         const boardApiKeyFromEnv = process.env.PAPERCLIP_BOARD_API_KEY;
-        let token = tokenFromEnv ?? null;
+        let token = tokenFromFile ?? tokenFromEnv ?? null;
         if (!token && config.discordBotTokenRef) {
             try {
                 token = await ctx.secrets.resolve(config.discordBotTokenRef);
@@ -193,11 +212,12 @@ const plugin = definePlugin({
             }
         }
         if (!token) {
-            ctx.logger.warn("No bot token available (DISCORD_BOT_TOKEN env not set AND " +
-                "ctx.secrets.resolve(discordBotTokenRef) unavailable). Plugin disabled.");
+            ctx.logger.warn("No bot token available (/secrets/discord-bot-token absent AND " +
+                "DISCORD_BOT_TOKEN env not set AND ctx.secrets.resolve(discordBotTokenRef) " +
+                "unavailable). Plugin disabled.");
             return;
         }
-        let paperclipBoardApiKey = boardApiKeyFromEnv ?? "";
+        let paperclipBoardApiKey = boardApiKeyFromFile ?? boardApiKeyFromEnv ?? "";
         if (!paperclipBoardApiKey && config.paperclipBoardApiKeyRef) {
             try {
                 paperclipBoardApiKey = await ctx.secrets.resolve(config.paperclipBoardApiKeyRef);
