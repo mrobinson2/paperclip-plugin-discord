@@ -63,6 +63,11 @@ export declare const METRIC_NAMES: {
     readonly gatewayCloseCode: "discord_gateway_close_code";
     readonly gatewayReady: "discord_gateway_ready";
     readonly gatewayAckTimeout: "discord_gateway_ack_timeout";
+    readonly cfgAgentChat: "discord_cfg_agentchat";
+    readonly cfgGwNeedsMsg: "discord_cfg_gw_needs_msg";
+    readonly msgReceived: "discord_msg_received";
+    readonly msgKind: "discord_msg_kind";
+    readonly agentChatCreated: "discord_agentchat_created";
     readonly escalationsCreated: "discord_escalations_created";
     readonly escalationsResolved: "discord_escalations_resolved";
     readonly escalationsTimedOut: "discord_escalations_timed_out";

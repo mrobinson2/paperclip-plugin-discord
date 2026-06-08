@@ -570,6 +570,8 @@ const plugin = definePlugin({
       !!voiceEnv.guildId && !!voiceEnv.voiceChannelId && hasProviderCreds && hasAnySink;
 
     // --- Gateway connection for real-time interaction handling ---
+    ctx.metrics.write(METRIC_NAMES.cfgAgentChat, config.enableAgentChat ? 1 : 0).catch(() => {});
+    ctx.metrics.write(METRIC_NAMES.cfgGwNeedsMsg, gatewayNeedsMessages ? 1 : 0).catch(() => {});
     const gateway = await connectGateway(
       ctx,
       token,
@@ -578,10 +580,12 @@ const plugin = definePlugin({
       },
       gatewayNeedsMessages
         ? async (message: MessageCreateEvent) => {
+            if (!message.author?.bot) ctx.metrics.write(METRIC_NAMES.msgReceived, 1).catch(() => {});
             const kind = classifyInbound(message, {
               enableAgentChat: config.enableAgentChat,
               warRoomChannelId: defaultChannelId,
             });
+            ctx.metrics.write(METRIC_NAMES.msgKind, kind === "agentChat" ? 2 : kind === "reply" ? 1 : 0).catch(() => {});
             if (kind === "reply") {
               await handleMessageCreate(message);
             } else if (kind === "agentChat") {

@@ -20,6 +20,7 @@ export async function handleAgentChat(ctx, message, opts) {
             defaultAgentId: opts.defaultAgentId,
             companyId,
         });
+        ctx.metrics.write("discord_agentchat_created", 2).catch(() => { });
         return;
     }
     const title = text.split("\n")[0].slice(0, 80);
@@ -36,6 +37,7 @@ export async function handleAgentChat(ctx, message, opts) {
         }, opts.apiKey);
         if (!resp.ok) {
             ctx.logger.error("agent-chat: issue create failed", { status: resp.status });
+            ctx.metrics.write("discord_agentchat_created", 3).catch(() => { });
             return;
         }
         ctx.logger.info("agent-chat: created issue from Discord message", {
@@ -43,9 +45,11 @@ export async function handleAgentChat(ctx, message, opts) {
             companyId,
             assigneeAgentId: opts.defaultAgentId,
         });
+        ctx.metrics.write("discord_agentchat_created", 1).catch(() => { });
     }
     catch (err) {
         ctx.logger.error("agent-chat: issue create error", { error: String(err) });
+        ctx.metrics.write("discord_agentchat_created", 4).catch(() => { });
     }
 }
 export function classifyInbound(message, opts) {
