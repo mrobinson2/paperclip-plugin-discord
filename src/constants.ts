@@ -37,6 +37,8 @@ export const DEFAULT_CONFIG = {
   proactiveScanIntervalMinutes: 15,
   enableCommands: true,
   enableInbound: true,
+  enableAgentChat: false,
+  defaultAgentId: "",
   topicRouting: false,
   digestMode: "off" as string,
   dailyDigestTime: "09:00",

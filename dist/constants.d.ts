@@ -33,6 +33,8 @@ export declare const DEFAULT_CONFIG: {
     readonly proactiveScanIntervalMinutes: 15;
     readonly enableCommands: true;
     readonly enableInbound: true;
+    readonly enableAgentChat: false;
+    readonly defaultAgentId: "";
     readonly topicRouting: false;
     readonly digestMode: string;
     readonly dailyDigestTime: "09:00";

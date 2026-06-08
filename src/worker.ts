@@ -31,6 +31,7 @@ import {
 import { handleInteraction, SLASH_COMMANDS, type CommandContext } from "./commands.js";
 import { runIntelligenceScan, runBackfill } from "./intelligence.js";
 import { connectGateway, type MessageCreateEvent } from "./gateway.js";
+import { classifyInbound, handleAgentChat } from "./agent-chat.js";
 import {
   handleAcpOutput,
   routeMessageToAgent,
@@ -88,6 +89,8 @@ type DiscordConfig = {
   proactiveScanIntervalMinutes: number;
   enableCommands: boolean;
   enableInbound: boolean;
+  enableAgentChat: boolean;
+  defaultAgentId: string;
   topicRouting: boolean;
   digestMode: string;
   dailyDigestTime: string;
@@ -516,7 +519,8 @@ const plugin = definePlugin({
       config.enableMediaPipeline === true ||
       config.enableCustomCommands === true ||
       config.enableProactiveSuggestions === true ||
-      config.enableIntelligence === true;
+      config.enableIntelligence === true ||
+      config.enableAgentChat === true;
 
     // --- Phase 1B war-room voice: provider-abstracted ---
     // Voice startup is gated on env vars. Required: guild + voice channel IDs,
@@ -572,7 +576,23 @@ const plugin = definePlugin({
       async (interaction) => {
         return handleInteraction(ctx, interaction as any, cmdCtx);
       },
-      gatewayNeedsMessages ? handleMessageCreate : undefined,
+      gatewayNeedsMessages
+        ? async (message: MessageCreateEvent) => {
+            const kind = classifyInbound(message, {
+              enableAgentChat: config.enableAgentChat,
+              warRoomChannelId: defaultChannelId,
+            });
+            if (kind === "reply") {
+              await handleMessageCreate(message);
+            } else if (kind === "agentChat") {
+              await handleAgentChat(ctx, message, {
+                baseUrl,
+                apiKey: paperclipBoardApiKey,
+                defaultAgentId: config.defaultAgentId,
+              });
+            }
+          }
+        : undefined,
       {
         listenForMessages: gatewayNeedsMessages,
         includeMessageContent: gatewayNeedsMessages,

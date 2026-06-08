@@ -6,6 +6,7 @@ import { formatIssueCreated, formatIssueDone, formatApprovalCreated, formatSessi
 import { handleInteraction, SLASH_COMMANDS } from "./commands.js";
 import { runIntelligenceScan, runBackfill } from "./intelligence.js";
 import { connectGateway } from "./gateway.js";
+import { classifyInbound, handleAgentChat } from "./agent-chat.js";
 import { handleAcpOutput, initiateHandoff, startDiscussion, } from "./session-registry.js";
 import { DiscordAdapter } from "./adapter.js";
 import { registerCommand } from "./custom-commands.js";
@@ -353,7 +354,8 @@ const plugin = definePlugin({
             config.enableMediaPipeline === true ||
             config.enableCustomCommands === true ||
             config.enableProactiveSuggestions === true ||
-            config.enableIntelligence === true;
+            config.enableIntelligence === true ||
+            config.enableAgentChat === true;
         // --- Phase 1B war-room voice: provider-abstracted ---
         // Voice startup is gated on env vars. Required: guild + voice channel IDs,
         // a provider with its credentials, and at least one sink. If any of the
@@ -398,7 +400,24 @@ const plugin = definePlugin({
         // --- Gateway connection for real-time interaction handling ---
         const gateway = await connectGateway(ctx, token, async (interaction) => {
             return handleInteraction(ctx, interaction, cmdCtx);
-        }, gatewayNeedsMessages ? handleMessageCreate : undefined, {
+        }, gatewayNeedsMessages
+            ? async (message) => {
+                const kind = classifyInbound(message, {
+                    enableAgentChat: config.enableAgentChat,
+                    warRoomChannelId: defaultChannelId,
+                });
+                if (kind === "reply") {
+                    await handleMessageCreate(message);
+                }
+                else if (kind === "agentChat") {
+                    await handleAgentChat(ctx, message, {
+                        baseUrl,
+                        apiKey: paperclipBoardApiKey,
+                        defaultAgentId: config.defaultAgentId,
+                    });
+                }
+            }
+            : undefined, {
             listenForMessages: gatewayNeedsMessages,
             includeMessageContent: gatewayNeedsMessages,
             enableVoice: voiceEnabled,

@@ -247,6 +247,20 @@ const manifest: PaperclipPluginManifestV1 = {
           "Route Discord replies to bot notifications back to Paperclip as issue comments or escalation responses.",
         default: DEFAULT_CONFIG.enableInbound,
       },
+      enableAgentChat: {
+        type: "boolean",
+        title: "Enable agent chat in war-room",
+        description:
+          "Treat standalone (non-reply) messages in the default channel as input to the default agent by creating an assigned issue.",
+        default: DEFAULT_CONFIG.enableAgentChat,
+      },
+      defaultAgentId: {
+        type: "string",
+        title: "Default agent for war-room chat",
+        description:
+          "Paperclip agent UUID assigned to issues created from standalone war-room messages.",
+        default: DEFAULT_CONFIG.defaultAgentId,
+      },
       topicRouting: {
         type: "boolean",
         title: "Enable topic/channel routing",
