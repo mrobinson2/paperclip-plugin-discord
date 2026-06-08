@@ -60,6 +60,9 @@ export declare const METRIC_NAMES: {
     readonly signalsExtracted: "discord_signals_extracted";
     readonly approvalsDecided: "discord_approvals_decided";
     readonly gatewayReconnections: "discord_gateway_reconnections";
+    readonly gatewayCloseCode: "discord_gateway_close_code";
+    readonly gatewayReady: "discord_gateway_ready";
+    readonly gatewayAckTimeout: "discord_gateway_ack_timeout";
     readonly escalationsCreated: "discord_escalations_created";
     readonly escalationsResolved: "discord_escalations_resolved";
     readonly escalationsTimedOut: "discord_escalations_timed_out";

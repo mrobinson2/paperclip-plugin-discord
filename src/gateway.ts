@@ -240,6 +240,7 @@ export async function connectGateway(
             resumeUrl = ready.resume_gateway_url;
             consecutiveFailures = 0;
             ctx.logger.info("Gateway ready", { sessionId });
+            ctx.metrics.write(METRIC_NAMES.gatewayReady, 1).catch(() => {});
           }
 
           if (payload.t === "RESUMED") {
@@ -338,6 +339,7 @@ export async function connectGateway(
 
     ws.onclose = (event) => {
       ctx.logger.info("Gateway WebSocket closed", { code: event.code, reason: event.reason });
+      ctx.metrics.write(METRIC_NAMES.gatewayCloseCode, event.code).catch(() => {});
       cleanup();
       if (!closed && event.code !== 4004) {
         consecutiveFailures++;
@@ -368,6 +370,7 @@ export async function connectGateway(
       ws?.send(JSON.stringify({ op: 1, d: sequence }));
       heartbeatAckTimeout = setTimeout(() => {
         ctx.logger.warn("Heartbeat ACK not received, forcing reconnect");
+        ctx.metrics.write(METRIC_NAMES.gatewayAckTimeout, 1).catch(() => {});
         cleanup();
         consecutiveFailures++;
         ctx.metrics.write(METRIC_NAMES.gatewayReconnections, 1).catch(() => {});
