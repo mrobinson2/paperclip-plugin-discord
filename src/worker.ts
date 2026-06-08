@@ -88,6 +88,8 @@ type DiscordConfig = {
   proactiveScanIntervalMinutes: number;
   enableCommands: boolean;
   enableInbound: boolean;
+  enableAgentChat: boolean;
+  defaultAgentId: string;
   topicRouting: boolean;
   digestMode: string;
   dailyDigestTime: string;
