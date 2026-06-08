@@ -55,6 +55,7 @@ const AGENT = "b9cfea80-98d6-4607-8065-63315103caf4";
 function makeCtx(overrides: Record<string, unknown> = {}) {
   return {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    metrics: { write: vi.fn().mockResolvedValue(undefined) },
     agents: {
       list: vi.fn().mockResolvedValue([{ id: AGENT, name: "Alfred" }]),
     },
