@@ -1,4 +1,3 @@
-import { paperclipFetch } from "./paperclip-fetch.js";
 import { resolveCompanyId } from "./company-resolver.js";
 /**
  * Turn a standalone war-room message into a Paperclip issue assigned to the
@@ -24,23 +23,18 @@ export async function handleAgentChat(ctx, message, opts) {
         return;
     }
     const title = text.split("\n")[0].slice(0, 80);
+    // Create via the SDK's host-authenticated issues client (like ctx.issues.get
+    // used elsewhere) rather than raw HTTP — avoids needing a board API key, which
+    // the plugin config does not carry, and which made the raw POST return 401.
     try {
-        const resp = await paperclipFetch(`${opts.baseUrl}/api/companies/${companyId}/issues`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                title,
-                description: text,
-                status: "todo",
-                assigneeAgentId: opts.defaultAgentId,
-            }),
-        }, opts.apiKey);
-        if (!resp.ok) {
-            ctx.logger.error("agent-chat: issue create failed", { status: resp.status });
-            ctx.metrics.write("discord_agentchat_created", 3).catch(() => { });
-            return;
-        }
+        const issue = await ctx.issues.create({
+            companyId,
+            title,
+            description: text,
+            assigneeAgentId: opts.defaultAgentId,
+        });
         ctx.logger.info("agent-chat: created issue from Discord message", {
+            issueId: issue?.id,
             from: message.author.username,
             companyId,
             assigneeAgentId: opts.defaultAgentId,
