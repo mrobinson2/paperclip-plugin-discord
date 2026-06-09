@@ -55,7 +55,7 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
     agents: {
       list: vi.fn().mockResolvedValue([{ id: AGENT, name: "Alfred" }]),
     },
-    issues: { create: vi.fn().mockResolvedValue({ id: "issue-1" }) },
+    issues: { create: vi.fn().mockResolvedValue({ id: "issue-1" }), update: vi.fn().mockResolvedValue({}) },
     ...overrides,
   } as any;
 }
@@ -79,6 +79,7 @@ describe("handleAgentChat", () => {
       description: "are you there?",
       assigneeAgentId: AGENT,
     });
+    expect(ctx.issues.update).toHaveBeenCalledWith("issue-1", { status: "todo" }, COMPANY);
   });
 
   it("ignores empty messages", async () => {
