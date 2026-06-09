@@ -33,8 +33,15 @@ export async function handleAgentChat(ctx, message, opts) {
             description: text,
             assigneeAgentId: opts.defaultAgentId,
         });
+        // ctx.issues.create has no status param and defaults to "backlog" — which
+        // never starts when the assignee is mid-run. Force "todo" so it queues and
+        // runs regardless of the agent's current state.
+        const issueId = issue?.id;
+        if (issueId) {
+            await ctx.issues.update(issueId, { status: "todo" }, companyId);
+        }
         ctx.logger.info("agent-chat: created issue from Discord message", {
-            issueId: issue?.id,
+            issueId,
             from: message.author.username,
             companyId,
             assigneeAgentId: opts.defaultAgentId,
