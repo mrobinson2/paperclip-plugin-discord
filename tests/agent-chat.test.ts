@@ -1,11 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { classifyInbound, handleAgentChat } from "../src/agent-chat.js";
-import { paperclipFetch } from "../src/paperclip-fetch.js";
 import { resolveCompanyId } from "../src/company-resolver.js";
 
-vi.mock("../src/paperclip-fetch.js", () => ({
-  paperclipFetch: vi.fn(),
-}));
 vi.mock("../src/company-resolver.js", () => ({
   resolveCompanyId: vi.fn(),
 }));
@@ -59,6 +55,7 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
     agents: {
       list: vi.fn().mockResolvedValue([{ id: AGENT, name: "Alfred" }]),
     },
+    issues: { create: vi.fn().mockResolvedValue({ id: "issue-1" }) },
     ...overrides,
   } as any;
 }
@@ -69,48 +66,36 @@ describe("handleAgentChat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveCompanyId).mockResolvedValue(COMPANY);
-    vi.mocked(paperclipFetch).mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: "issue-1" }) } as any);
   });
 
-  it("creates an issue assigned to the default agent", async () => {
+  it("creates an issue assigned to the default agent via ctx.issues.create", async () => {
     const ctx = makeCtx();
     await handleAgentChat(ctx, msg({ content: "are you there?" }), OPTS);
 
-    expect(paperclipFetch).toHaveBeenCalledTimes(1);
-    const [url, init, apiKey] = vi.mocked(paperclipFetch).mock.calls[0]!;
-    expect(url).toBe(`https://api.test/api/companies/${COMPANY}/issues`);
-    expect(apiKey).toBe("key-123");
-    const body = JSON.parse((init as any).body);
-    expect(body).toMatchObject({
+    expect(ctx.issues.create).toHaveBeenCalledTimes(1);
+    expect(ctx.issues.create).toHaveBeenCalledWith({
+      companyId: COMPANY,
       title: "are you there?",
       description: "are you there?",
-      status: "todo",
       assigneeAgentId: AGENT,
     });
   });
 
   it("ignores empty messages", async () => {
-    await handleAgentChat(makeCtx(), msg({ content: "   " }), OPTS);
-    expect(paperclipFetch).not.toHaveBeenCalled();
+    const ctx = makeCtx();
+    await handleAgentChat(ctx, msg({ content: "   " }), OPTS);
+    expect(ctx.issues.create).not.toHaveBeenCalled();
   });
 
   it("skips when the configured agent is not found for the company", async () => {
     const ctx = makeCtx({ agents: { list: vi.fn().mockResolvedValue([{ id: "other", name: "Bob" }]) } });
     await handleAgentChat(ctx, msg({ content: "hi" }), OPTS);
-    expect(paperclipFetch).not.toHaveBeenCalled();
+    expect(ctx.issues.create).not.toHaveBeenCalled();
     expect(ctx.logger.warn).toHaveBeenCalled();
   });
 
-  it("logs an error when issue creation returns non-ok", async () => {
-    vi.mocked(paperclipFetch).mockResolvedValue({ ok: false, status: 500 } as any);
-    const ctx = makeCtx();
-    await handleAgentChat(ctx, msg({ content: "hi" }), OPTS);
-    expect(ctx.logger.error).toHaveBeenCalled();
-  });
-
-  it("swallows fetch errors and logs them (fail-soft)", async () => {
-    vi.mocked(paperclipFetch).mockRejectedValue(new Error("network down"));
-    const ctx = makeCtx();
+  it("swallows create errors and logs them (fail-soft)", async () => {
+    const ctx = makeCtx({ issues: { create: vi.fn().mockRejectedValue(new Error("boom")) } });
     await expect(handleAgentChat(ctx, msg({ content: "hi" }), OPTS)).resolves.toBeUndefined();
     expect(ctx.logger.error).toHaveBeenCalled();
   });
