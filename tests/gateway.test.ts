@@ -98,6 +98,111 @@ describe("connectGateway", () => {
 
     result.close();
   });
+
+  describe("voice readiness gate (regression: join-before-ready race)", () => {
+    class FakeWebSocket {
+      static instances: FakeWebSocket[] = [];
+      static OPEN = 1;
+      readyState = 1; // OPEN
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      sent: string[] = [];
+
+      constructor(_url: string) {
+        FakeWebSocket.instances.push(this);
+      }
+      send(payload: string) {
+        this.sent.push(payload);
+      }
+      close() {}
+    }
+
+    async function connectVoiceGateway() {
+      FakeWebSocket.instances = [];
+      globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+      const { connectGateway } = await import("../src/gateway.js");
+      const ctx = makeCtx();
+      (ctx as unknown as { metrics: { write: ReturnType<typeof vi.fn> } }).metrics = {
+        write: vi.fn().mockResolvedValue(undefined),
+      };
+      (ctx.http.fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ url: "wss://gateway.discord.test" }),
+      });
+      const handle = await connectGateway(ctx, "fake-token", vi.fn(), undefined, {
+        enableVoice: true,
+      });
+      const socket = FakeWebSocket.instances[0]!;
+      // op 10 HELLO -> triggers IDENTIFY
+      socket.onmessage?.({
+        data: JSON.stringify({ op: 10, d: { heartbeat_interval: 10000 }, s: null, t: null }),
+      });
+      return { handle, socket };
+    }
+
+    function sendReady(socket: FakeWebSocket) {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          op: 0,
+          t: "READY",
+          s: 1,
+          d: { session_id: "sess-1", resume_gateway_url: "wss://resume.test" },
+        }),
+      });
+    }
+
+    it("exposes whenReady() on the voice handle when enableVoice is set", async () => {
+      const { handle } = await connectVoiceGateway();
+      expect(handle.voice).toBeDefined();
+      expect(typeof handle.voice!.whenReady).toBe("function");
+      handle.close();
+    });
+
+    it("whenReady() does NOT resolve before READY arrives", async () => {
+      const { handle } = await connectVoiceGateway();
+      let resolved = false;
+      handle.voice!
+        .whenReady()
+        .then(() => {
+          resolved = true;
+        })
+        // close() at the end of the test rejects the promise; swallow so it
+        // doesn't surface as an unhandled rejection in the runner.
+        .catch(() => {});
+      // Let microtasks flush; READY has not been sent yet.
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(resolved).toBe(false);
+      handle.close();
+    });
+
+    it("whenReady() resolves once READY is received (op-4 can now be delivered)", async () => {
+      const { handle, socket } = await connectVoiceGateway();
+      const readyP = handle.voice!.whenReady();
+      sendReady(socket);
+      await expect(readyP).resolves.toBeUndefined();
+      handle.close();
+    });
+
+    it("whenReady() rejects if the gateway is closed before READY", async () => {
+      const { handle } = await connectVoiceGateway();
+      const readyP = handle.voice!.whenReady();
+      handle.close();
+      await expect(readyP).rejects.toThrow(/ready/i);
+    });
+
+    it("treats close 4014 (disallowed intent) as fatal: whenReady rejects, no reconnect", async () => {
+      const { handle, socket } = await connectVoiceGateway();
+      const readyP = handle.voice!.whenReady();
+      const before = FakeWebSocket.instances.length;
+      socket.onclose?.({ code: 4014, reason: "Disallowed intent" });
+      await expect(readyP).rejects.toThrow(/non-recoverable|4014/i);
+      // A fatal close does not schedule a reconnect, so no new socket appears.
+      expect(FakeWebSocket.instances.length).toBe(before);
+    });
+  });
 });
 
 describe("respondViaCallback", () => {

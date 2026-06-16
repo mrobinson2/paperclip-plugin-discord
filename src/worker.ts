@@ -653,6 +653,13 @@ const plugin = definePlugin({
           sinks,
           voiceAdapterCreator: adapterCreator,
         });
+        // The gateway WebSocket connects asynchronously; connectGateway returns
+        // before READY. Joining a voice channel before the socket is OPEN drops
+        // the op-4 voice-state-update (sendPayload returns false), so Discord
+        // never replies with VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE and the
+        // @discordjs/voice join times out at entersState(Ready, 5000). Wait for
+        // READY so the join handshake's op-4 actually goes out.
+        await gateway.voice.whenReady();
         await voiceClient.start();
         voiceClientStop = () => voiceClient.stop();
       } catch (error) {

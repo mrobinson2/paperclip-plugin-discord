@@ -94,6 +94,15 @@ export interface GatewayVoiceHandle {
   onVoiceStateUpdate(handler: VoiceStateUpdateHandler): void;
   /** Subscribe to VOICE_SERVER_UPDATE dispatch events. */
   onVoiceServerUpdate(handler: VoiceServerUpdateHandler): void;
+  /**
+   * Resolves once the gateway WebSocket has received READY (so sendPayload can
+   * actually deliver the op-4 voice-state-update). Callers MUST await this before
+   * joining a voice channel — joining before the socket is OPEN drops the op-4
+   * payload silently (sendPayload returns false), Discord never replies with
+   * VOICE_STATE_UPDATE / VOICE_SERVER_UPDATE, and @discordjs/voice's join times
+   * out. Rejects if the gateway is closed before it becomes ready.
+   */
+  whenReady(): Promise<void>;
 }
 
 export interface GatewayHandle {
@@ -179,6 +188,31 @@ export async function connectGateway(
   const voiceStateUpdateHandlers: VoiceStateUpdateHandler[] = [];
   const voiceServerUpdateHandlers: VoiceServerUpdateHandler[] = [];
 
+  // Readiness gate for voice. `whenReady()` (on the voice handle) resolves once
+  // the socket has received READY, so a caller can wait before joining a voice
+  // channel — joining before the socket is OPEN drops the op-4 payload and the
+  // @discordjs/voice handshake times out. Resolved on the first READY; rejected
+  // if the gateway is closed first. Subsequent resume/reconnect READYs are no-ops.
+  let resolveReady: (() => void) | null = null;
+  let rejectReady: ((err: Error) => void) | null = null;
+  let readySettled = false;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  // Avoid an unhandled-rejection if no one ever calls whenReady().
+  readyPromise.catch(() => {});
+  function markReady() {
+    if (readySettled) return;
+    readySettled = true;
+    resolveReady?.();
+  }
+  function failReady(err: Error) {
+    if (readySettled) return;
+    readySettled = true;
+    rejectReady?.(err);
+  }
+
   function getReconnectDelay(): number {
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       return MAX_BACKOFF_MS;
@@ -241,6 +275,7 @@ export async function connectGateway(
             consecutiveFailures = 0;
             ctx.logger.info("Gateway ready", { sessionId });
             ctx.metrics.write(METRIC_NAMES.gatewayReady, 1).catch(() => {});
+            markReady();
           }
 
           if (payload.t === "RESUMED") {
@@ -341,7 +376,21 @@ export async function connectGateway(
       ctx.logger.info("Gateway WebSocket closed", { code: event.code, reason: event.reason });
       ctx.metrics.write(METRIC_NAMES.gatewayCloseCode, event.code).catch(() => {});
       cleanup();
-      if (!closed && event.code !== 4004) {
+      // Close codes 4004 and 4010-4014 are non-recoverable: reconnecting just
+      // repeats the same rejected handshake. 4014 (Disallowed intent) is the
+      // usual cause when the privileged MESSAGE CONTENT / SERVER MEMBERS intent
+      // is not enabled in the Developer Portal, which is exactly what silently
+      // breaks war-room text routing. Fail fast with an actionable log instead
+      // of looping forever.
+      const fatalCloseCodes = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
+      if (event.code === 4014) {
+        ctx.logger.error(
+          "Gateway closed 4014 (Disallowed intent). Enable the privileged MESSAGE " +
+            "CONTENT (and SERVER MEMBERS) intent for this bot in the Discord Developer " +
+            "Portal, then redeploy — war-room chat cannot receive messages without it.",
+        );
+      }
+      if (!closed && !fatalCloseCodes.has(event.code)) {
         consecutiveFailures++;
         ctx.metrics.write(METRIC_NAMES.gatewayReconnections, 1).catch(() => {});
         const delay = getReconnectDelay();
@@ -352,6 +401,10 @@ export async function connectGateway(
           });
         }
         setTimeout(() => connect(resumeUrl ?? url, sessionId !== null), delay);
+      } else if (!closed && fatalCloseCodes.has(event.code)) {
+        // Non-recoverable: stop, and reject any pending voice readiness so a
+        // voice join fails fast instead of hanging until its 5s timeout.
+        failReady(new Error(`Gateway closed with non-recoverable code ${event.code}`));
       }
     };
 
@@ -404,6 +457,7 @@ export async function connectGateway(
     close: () => {
       closed = true;
       cleanup();
+      failReady(new Error("Gateway closed before it became ready"));
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close(1000, "Plugin shutting down");
       }
@@ -424,6 +478,9 @@ export async function connectGateway(
       },
       onVoiceServerUpdate(handler: VoiceServerUpdateHandler): void {
         voiceServerUpdateHandlers.push(handler);
+      },
+      whenReady(): Promise<void> {
+        return readyPromise;
       },
     };
   }
