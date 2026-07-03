@@ -67,23 +67,17 @@ export function formatIssueCreated(event: PluginEvent, baseUrl?: string): Discor
       : `**${parentIdentifier}**`;
     fields.push({ name: "Parent", value: parentLine, inline: true });
   }
-  if (status) fields.push({ name: "Status", value: `\`${humanizeStatus(status)}\``, inline: true });
-  if (priority) fields.push({ name: "Priority", value: `\`${humanizePriority(priority)}\``, inline: true });
+  // "Issue Created" already implies the default state, so only surface Status
+  // and Priority when they carry signal (non-default values). Everything the
+  // operator needs to act on is the title + assignee; the rest is debug noise.
+  if (status && !["todo", "backlog"].includes(status))
+    fields.push({ name: "Status", value: `\`${humanizeStatus(status)}\``, inline: true });
+  if (priority && priority !== "medium")
+    fields.push({ name: "Priority", value: `\`${humanizePriority(priority)}\``, inline: true });
   if (assigneeName) fields.push({ name: "Assignee", value: assigneeName, inline: true });
   if (projectName) fields.push({ name: "Project", value: projectName, inline: true });
-
-  const knownKeys = new Set([
-    "identifier", "title", "description", "status", "priority",
-    "assigneeName", "projectName", "assigneeAgentId", "projectId",
-    "creatorName", "parentIdentifier", "parentTitle", "parentId",
-  ]);
-  for (const [key, value] of Object.entries(p)) {
-    if (knownKeys.has(key) || value == null || value === "") continue;
-    const display = typeof value === "object" ? JSON.stringify(value) : String(value);
-    if (display.length > 0 && display.length <= 1024) {
-      fields.push({ name: key, value: display, inline: display.length < 40 });
-    }
-  }
+  // Unknown payload keys (statusDefaulted, runId, updatedAt, ...) are debug
+  // detail — deliberately NOT rendered. They used to be dumped as fields.
 
   const base = resolveBaseUrl(baseUrl);
 
@@ -145,8 +139,8 @@ export function formatIssueDone(event: PluginEvent, baseUrl?: string): DiscordMe
 
   const fields: Array<{ name: string; value: string; inline?: boolean }> = [];
   fields.push({ name: "Completed by", value: completedBy, inline: true });
-  if (status) fields.push({ name: "Status", value: `\`${humanizeStatus(status)}\``, inline: true });
-  if (priority) fields.push({ name: "Priority", value: `\`${humanizePriority(priority)}\``, inline: true });
+  // "Issue Completed" says it all — Status: Done is redundant, and Priority
+  // no longer matters once the work is finished. Neither is rendered.
   fields.push({ name: "Summary", value: summary });
   if (parentIdentifier) {
     const parentLine = parentTitle
@@ -410,9 +404,22 @@ export function formatBudgetWarning(data: BudgetWarningData): DiscordMessage {
   };
 }
 
+// A run id is only useful when debugging — when the payload gives us nothing
+// human (no agent name, no issue), keep the uuid out of the headline and tuck
+// it into the footer instead.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function runLabel(p: Payload, entityId: string | undefined): { label: string; runId: string | null } {
+  for (const raw of [p.agentName, entityId]) {
+    const c = raw ? String(raw) : "";
+    if (c && !UUID_RE.test(c)) return { label: c, runId: null };
+  }
+  return { label: "Agent", runId: String(entityId ?? "unknown") };
+}
+
 export function formatAgentRunStarted(event: PluginEvent): DiscordMessage {
   const p = event.payload as Payload;
-  const agentName = String(p.agentName ?? event.entityId);
+  const { label, runId } = runLabel(p, event.entityId);
   const issueIdentifier = p.issueIdentifier ? String(p.issueIdentifier) : null;
   const issueTitle = p.issueTitle ? String(p.issueTitle) : null;
 
@@ -423,10 +430,10 @@ export function formatAgentRunStarted(event: PluginEvent): DiscordMessage {
   return {
     embeds: [
       {
-        title: `Run Started: ${agentName}`,
-        description: `**${agentName}** has started a new run.${taskLine}`,
+        title: `Run Started: ${label}`,
+        description: `**${label}** has started a new run.${taskLine}`,
         color: COLORS.BLUE,
-        footer: { text: "Paperclip" },
+        footer: { text: runId ? `Paperclip • run ${runId}` : "Paperclip" },
         timestamp: event.occurredAt,
       },
     ],
@@ -435,7 +442,7 @@ export function formatAgentRunStarted(event: PluginEvent): DiscordMessage {
 
 export function formatAgentRunFinished(event: PluginEvent): DiscordMessage {
   const p = event.payload as Payload;
-  const agentName = String(p.agentName ?? event.entityId);
+  const { label, runId } = runLabel(p, event.entityId);
   const issueIdentifier = p.issueIdentifier ? String(p.issueIdentifier) : null;
   const issueTitle = p.issueTitle ? String(p.issueTitle) : null;
 
@@ -446,10 +453,10 @@ export function formatAgentRunFinished(event: PluginEvent): DiscordMessage {
   return {
     embeds: [
       {
-        title: `Run Finished: ${agentName}`,
-        description: `**${agentName}** completed successfully.${taskLine}`,
+        title: `Run Finished: ${label}`,
+        description: `**${label}** completed successfully.${taskLine}`,
         color: COLORS.GREEN,
-        footer: { text: "Paperclip" },
+        footer: { text: runId ? `Paperclip • run ${runId}` : "Paperclip" },
         timestamp: event.occurredAt,
       },
     ],

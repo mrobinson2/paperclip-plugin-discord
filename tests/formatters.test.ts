@@ -401,15 +401,25 @@ describe("humanized status and priority in issue embeds", () => {
     expect(priorityField?.value).toBe("`High`");
   });
 
-  it("issue done embed shows humanized status", () => {
+  it("issue done embed omits Status/Priority — the title already says completed", () => {
     const msg = formatIssueDone(
       makeEvent({ payload: { identifier: "X-1", status: "done", priority: "low" } }),
     );
     const fields = msg.embeds?.[0]?.fields ?? [];
-    const statusField = fields.find((f) => f.name === "Status");
-    const priorityField = fields.find((f) => f.name === "Priority");
-    expect(statusField?.value).toBe("`Done`");
-    expect(priorityField?.value).toBe("`Low`");
+    expect(fields.find((f) => f.name === "Status")).toBeUndefined();
+    expect(fields.find((f) => f.name === "Priority")).toBeUndefined();
+  });
+
+  it("issue created embed hides default To Do status and Medium priority", () => {
+    const msg = formatIssueCreated(
+      makeEvent({ payload: { identifier: "X-2", title: "T", status: "todo", priority: "medium", statusDefaulted: false, runId: "r-1" } }),
+    );
+    const fields = msg.embeds?.[0]?.fields ?? [];
+    expect(fields.find((f) => f.name === "Status")).toBeUndefined();
+    expect(fields.find((f) => f.name === "Priority")).toBeUndefined();
+    // debug payload keys are no longer dumped as fields
+    expect(fields.find((f) => f.name === "statusDefaulted")).toBeUndefined();
+    expect(fields.find((f) => f.name === "runId")).toBeUndefined();
   });
 });
 
