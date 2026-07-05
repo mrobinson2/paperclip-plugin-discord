@@ -132,7 +132,11 @@ export function formatIssueDone(event: PluginEvent, baseUrl?: string): DiscordMe
     explicitCompletedBy || assigneeName || executorName || agentName || assigneeUserId || assigneeAgentId,
   ) || "Unknown";
   const lastComment = p.lastComment ? String(p.lastComment) : null;
-  const summary = lastComment ? lastComment.slice(0, 200) : "No summary available";
+  // Discord caps an embed field value at 1024 chars; keep headroom for the
+  // ellipsis. 200 was throwing away most agent summaries mid-sentence.
+  const summary = lastComment
+    ? (lastComment.length > 1000 ? `${lastComment.slice(0, 1000)}…` : lastComment)
+    : "No summary available";
   const parentIdentifier = p.parentIdentifier ? String(p.parentIdentifier) : null;
   const parentTitle = p.parentTitle ? String(p.parentTitle) : null;
   const parentId = p.parentId ? String(p.parentId) : null;
@@ -329,7 +333,7 @@ function classifyError(errorMessage: string): { label: string; nextSteps: string
   };
 }
 
-export function formatSessionFailure(event: PluginEvent): DiscordMessage {
+export function formatSessionFailure(event: PluginEvent, baseUrl?: string): DiscordMessage {
   const p = event.payload as Payload;
   const agentName = String(p.agentName ?? p.name ?? event.entityId);
   const errorMessage = String(p.error ?? p.message ?? "Unknown error");
@@ -369,6 +373,7 @@ export function formatSessionFailure(event: PluginEvent): DiscordMessage {
         timestamp: event.occurredAt,
       },
     ],
+    components: issueLinkComponents(p, baseUrl),
   };
 }
 
@@ -417,7 +422,22 @@ function runLabel(p: Payload, entityId: string | undefined): { label: string; ru
   return { label: "Agent", runId: String(entityId ?? "unknown") };
 }
 
-export function formatAgentRunStarted(event: PluginEvent): DiscordMessage {
+// One "View Issue" button row shared by the run-lifecycle embeds. Empty array
+// (not undefined) when there's no public base URL or no issue to link — the
+// caller assigns it straight onto the message.
+function issueLinkComponents(p: Payload, baseUrl?: string): DiscordComponent[] {
+  const base = resolveBaseUrl(baseUrl);
+  const issueId = p.issueId ? String(p.issueId) : null;
+  if (!base || !issueId) return [];
+  return [
+    {
+      type: 1,
+      components: [{ type: 2, style: 5, label: "View Issue", url: `${base}/issues/${issueId}` }],
+    },
+  ];
+}
+
+export function formatAgentRunStarted(event: PluginEvent, baseUrl?: string): DiscordMessage {
   const p = event.payload as Payload;
   const { label, runId } = runLabel(p, event.entityId);
   const issueIdentifier = p.issueIdentifier ? String(p.issueIdentifier) : null;
@@ -437,10 +457,11 @@ export function formatAgentRunStarted(event: PluginEvent): DiscordMessage {
         timestamp: event.occurredAt,
       },
     ],
+    components: issueLinkComponents(p, baseUrl),
   };
 }
 
-export function formatAgentRunFinished(event: PluginEvent): DiscordMessage {
+export function formatAgentRunFinished(event: PluginEvent, baseUrl?: string): DiscordMessage {
   const p = event.payload as Payload;
   const { label, runId } = runLabel(p, event.entityId);
   const issueIdentifier = p.issueIdentifier ? String(p.issueIdentifier) : null;
@@ -460,5 +481,6 @@ export function formatAgentRunFinished(event: PluginEvent): DiscordMessage {
         timestamp: event.occurredAt,
       },
     ],
+    components: issueLinkComponents(p, baseUrl),
   };
 }

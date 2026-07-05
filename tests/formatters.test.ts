@@ -512,14 +512,14 @@ describe("formatIssueDone — actionability improvements", () => {
     expect(field?.value).toBe("Engineer");
   });
 
-  it("includes Summary field from lastComment, truncated to 200 chars", () => {
-    const longComment = "x".repeat(300);
+  it("includes Summary field from lastComment, within Discord's 1024 field cap", () => {
+    const longComment = "x".repeat(1200);
     const msg = formatIssueDone(
       makeEvent({ payload: { identifier: "X-2", title: "T", lastComment: longComment } }),
     );
     const field = msg.embeds?.[0]?.fields?.find((f) => f.name === "Summary");
     expect(field).toBeDefined();
-    expect(field!.value.length).toBeLessThanOrEqual(200);
+    expect(field!.value.length).toBeLessThanOrEqual(1024);
   });
 
   it("includes Parent field when parentIdentifier is provided", () => {
@@ -846,5 +846,71 @@ describe("formatBudgetWarning", () => {
     expect(msg.embeds?.[0]?.description).toContain("100%");
     const fields = msg.embeds?.[0]?.fields ?? [];
     expect(fields.find((f) => f.name === "Remaining")?.value).toBe("$0.00");
+  });
+});
+
+// ── Run embeds: deep links + enriched payloads (2026-07-05) ─────────────────
+// Run lifecycle events carry only UUIDs from core; the worker enriches them
+// (agentName/issueIdentifier/issueTitle/issueId) and formatters add a View
+// Issue button when a public base URL is configured.
+
+describe("run embeds — View Issue links", () => {
+  const BASE = "https://mission-control-dev.example.com";
+  const runPayload = {
+    agentName: "Alfred",
+    issueId: "aaaa1111-2222-3333-4444-555566667777",
+    issueIdentifier: "MRT-387",
+    issueTitle: "Router connectivity smoke test",
+  };
+
+  it("run started links to the issue when baseUrl + issueId are present", () => {
+    const msg = formatAgentRunStarted(makeEvent({ payload: runPayload }), BASE);
+    const buttons = msg.components?.[0]?.components ?? [];
+    expect(buttons.some((b) => "url" in b && b.url === `${BASE}/issues/${runPayload.issueId}` && b.label === "View Issue")).toBe(true);
+    expect(msg.embeds?.[0]?.title).toBe("Run Started: Alfred");
+    expect(msg.embeds?.[0]?.description).toContain("MRT-387");
+  });
+
+  it("run started omits the button without a resolvable base URL", () => {
+    const msg = formatAgentRunStarted(makeEvent({ payload: runPayload }), "http://localhost:3100");
+    expect(msg.components ?? []).toHaveLength(0);
+  });
+
+  it("run started omits the button without an issueId", () => {
+    const msg = formatAgentRunStarted(makeEvent({ payload: { agentName: "Alfred" } }), BASE);
+    expect(msg.components ?? []).toHaveLength(0);
+  });
+
+  it("run finished links to the issue and keeps the task line", () => {
+    const msg = formatAgentRunFinished(makeEvent({ payload: runPayload }), BASE);
+    const buttons = msg.components?.[0]?.components ?? [];
+    expect(buttons.some((b) => "url" in b && b.url === `${BASE}/issues/${runPayload.issueId}`)).toBe(true);
+    expect(msg.embeds?.[0]?.title).toBe("Run Finished: Alfred");
+    expect(msg.embeds?.[0]?.description).toContain("Router connectivity smoke test");
+  });
+
+  it("session failure links to the issue when baseUrl + issueId are present", () => {
+    const msg = formatSessionFailure(
+      makeEvent({ payload: { ...runPayload, error: "API call failed after 3 retries: Connection error." } }),
+      BASE,
+    );
+    const buttons = msg.components?.[0]?.components ?? [];
+    expect(buttons.some((b) => "url" in b && b.url === `${BASE}/issues/${runPayload.issueId}`)).toBe(true);
+  });
+});
+
+describe("formatIssueDone — longer summary", () => {
+  it("keeps up to 1000 chars of the last comment and stays under Discord's 1024 field cap", () => {
+    const long = "x".repeat(1200);
+    const msg = formatIssueDone(makeEvent({ payload: { identifier: "MRT-1", title: "T", lastComment: long } }));
+    const summary = msg.embeds?.[0]?.fields?.find((f) => f.name === "Summary")?.value ?? "";
+    expect(summary.startsWith("x".repeat(1000))).toBe(true);
+    expect(summary.length).toBeLessThanOrEqual(1024);
+    expect(summary.endsWith("…")).toBe(true);
+  });
+
+  it("leaves short comments untouched", () => {
+    const msg = formatIssueDone(makeEvent({ payload: { identifier: "MRT-1", title: "T", lastComment: "all done" } }));
+    expect(msg.embeds?.[0]?.fields?.find((f) => f.name === "Summary")?.value).toBe("all done");
   });
 });

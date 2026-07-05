@@ -77,6 +77,10 @@ type DiscordConfig = {
   intelligenceChannelIds: string[];
   backfillDays: number;
   paperclipBaseUrl: string;
+  // Browser-facing origin for embed links (View Issue buttons). paperclipBaseUrl
+  // is usually in-container (localhost → resolveBaseUrl drops the links); set
+  // this to the public UI origin, e.g. https://mission-control-dev.mrtek.ai.
+  publicBaseUrl?: string;
   intelligenceRetentionDays: number;
   escalationChannelId: string;
   enableEscalations: boolean;
@@ -273,6 +277,51 @@ async function enrichIssueNotificationPayload(
   return payload;
 }
 
+/**
+ * Run lifecycle payloads (agent.run.started/finished/failed) carry only UUIDs
+ * from core — agentId and (via contextSnapshot) issueId. Resolve the human
+ * labels the formatters already look for (agentName, issueIdentifier,
+ * issueTitle) so embeds read "Run Started: Alfred — Task: MRT-387 …" instead
+ * of "Run Started: Agent". Fail-soft: any lookup error returns what we have
+ * so the notification still posts.
+ */
+export async function enrichRunEventPayload(
+  ctx: PluginContext,
+  event: PluginEvent,
+): Promise<IssueNotificationPayload> {
+  const payload = { ...(event.payload as IssueNotificationPayload) };
+  const companyId = event.companyId;
+  if (!companyId) return payload;
+
+  try {
+    if (payload.agentName == null && payload.agentId) {
+      const agents = await ctx.agents.list({ companyId });
+      const match = (agents as Array<{ id: string; name?: string | null }>).find(
+        (a) => a.id === payload.agentId,
+      );
+      if (match?.name) payload.agentName = match.name;
+    }
+
+    if (payload.issueId && (payload.issueIdentifier == null || payload.issueTitle == null)) {
+      const issue = await ctx.issues.get(String(payload.issueId), companyId) as {
+        identifier?: string | null;
+        title?: string | null;
+      } | null;
+      if (issue) {
+        if (payload.issueIdentifier == null) payload.issueIdentifier = issue.identifier ?? null;
+        if (payload.issueTitle == null) payload.issueTitle = issue.title ?? null;
+      }
+    }
+  } catch (error) {
+    ctx.logger.debug("Run event enrichment failed", {
+      runId: event.entityId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return payload;
+}
+
 async function resolveIssueCompanyIdForNotification(
   ctx: PluginContext,
   event: PluginEvent,
@@ -384,6 +433,9 @@ const plugin = definePlugin({
       }
     }
     const baseUrl = config.paperclipBaseUrl || "http://localhost:3100";
+    // Embed links must be clickable from a browser; the API base usually
+    // isn't (in-container localhost, which resolveBaseUrl rejects by design).
+    const linkBaseUrl = (config.publicBaseUrl || "").trim() || baseUrl;
     const retentionDays = config.intelligenceRetentionDays || 30;
     const defaultGuildId = normalizeDiscordId(config.defaultGuildId);
     const defaultChannelId = normalizeDiscordId(config.defaultChannelId) ?? "";
@@ -759,7 +811,7 @@ const plugin = definePlugin({
       const channelId = await resolveChannel(ctx, event.companyId, topicChannel || overrideChannelId || config.defaultChannelId, channelMap);
       if (!channelId) return;
 
-      const message = formatter(event, baseUrl);
+      const message = formatter(event, linkBaseUrl);
       const messageId = await postEmbedWithId(ctx, token, channelId, message);
 
       if (messageId) {
@@ -887,17 +939,20 @@ const plugin = definePlugin({
     }
 
     if (config.notifyOnAgentError) {
-      ctx.events.on("agent.run.failed", (event: PluginEvent) =>
-        notify(event, formatSessionFailure, errorsChannelId ?? undefined),
-      );
+      ctx.events.on("agent.run.failed", async (event: PluginEvent) => {
+        const payload = await enrichRunEventPayload(ctx, event);
+        await notify({ ...event, payload }, formatSessionFailure, errorsChannelId ?? undefined);
+      });
     }
 
-    ctx.events.on("agent.run.started", (event: PluginEvent) =>
-      notify(event, formatAgentRunStarted, bdPipelineChannelId ?? undefined),
-    );
-    ctx.events.on("agent.run.finished", (event: PluginEvent) =>
-      notify(event, formatAgentRunFinished, bdPipelineChannelId ?? undefined),
-    );
+    ctx.events.on("agent.run.started", async (event: PluginEvent) => {
+      const payload = await enrichRunEventPayload(ctx, event);
+      await notify({ ...event, payload }, formatAgentRunStarted, bdPipelineChannelId ?? undefined);
+    });
+    ctx.events.on("agent.run.finished", async (event: PluginEvent) => {
+      const payload = await enrichRunEventPayload(ctx, event);
+      await notify({ ...event, payload }, formatAgentRunFinished, bdPipelineChannelId ?? undefined);
+    });
 
     // ===================================================================
     // Phase 1: Escalation - human-in-the-loop support

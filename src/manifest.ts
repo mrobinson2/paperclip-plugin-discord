@@ -158,6 +158,13 @@ const manifest: PaperclipPluginManifestV1 = {
         description: "Base URL for Paperclip dashboard links and API calls",
         default: "http://localhost:3100",
       },
+      publicBaseUrl: {
+        type: "string",
+        title: "Public Base URL",
+        description:
+          "Browser-facing origin used for embed links (View Issue buttons), e.g. https://mission-control.example.com. Falls back to Paperclip Base URL; localhost origins render no links.",
+        default: "",
+      },
       intelligenceRetentionDays: {
         type: "number",
         title: "Intelligence retention (days)",
